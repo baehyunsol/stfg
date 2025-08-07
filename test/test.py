@@ -41,9 +41,9 @@ else:
 
 # initialize git
 subprocess.run(["cargo", "run", "--release", "--", "to-git", db_path, "-o", "test-dir/db/"], check=True)
-subprocess.run(["git", "-C", "test-dir", "init"], check=True, capture_output=True)
+subprocess.run(["git", "-C", "test-dir", "init"], check=True)
 subprocess.run(["git", "-C", "test-dir", "add", "--all"], check=True)
-subprocess.run(["git", "-C", "test-dir", "commit", "-m", "test"], check=True, capture_output=True)
+subprocess.run(["git", "-C", "test-dir", "commit", "-m", "test"], check=True)
 
 # re-construct the sqlite db from the git data
 subprocess.run(["cargo", "run", "--release", "--", "from-git", "test-dir/db", "-o", db_path2], check=True)
@@ -53,7 +53,7 @@ subprocess.run(["cargo", "run", "--release", "--", "to-git", db_path2, "-o", "te
 subprocess.run(["git", "-C", "test-dir", "add", "--all"], check=True)
 
 # It must fail because I haven't updated the db.
-assert subprocess.run(["git", "-C", "test-dir", "commit", "-m", "test"], capture_output=True).returncode != 0
+assert subprocess.run(["git", "-C", "test-dir", "commit", "-m", "test"]).returncode != 0
 
 os.remove(db_path2)
 
@@ -80,5 +80,12 @@ if delete_query is not None:
 
     # there must be something to commit
     subprocess.run(["git", "-C", "test-dir", "commit", "-m", "test"], check=True)
+
+# run from-git and to-git again. There should be no changes.
+if insert_query is not None or delete_query is not None:
+    subprocess.run(["cargo", "run", "--release", "--", "from-git", "test-dir/db", "-o", db_path2], check=True)
+    subprocess.run(["cargo", "run", "--release", "--", "to-git", db_path2, "-o", "test-dir/db/"], check=True)
+    subprocess.run(["git", "-C", "test-dir", "add", "--all"], check=True)
+    assert subprocess.run(["git", "-C", "test-dir", "commit", "-m", "test"]).returncode != 0
 
 shutil.rmtree("test-dir")

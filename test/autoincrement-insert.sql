@@ -1,0 +1,1 @@
+INSERT INTO table_1 (date, content) VALUES ("2025-08-07", "some content");

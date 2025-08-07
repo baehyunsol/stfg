@@ -1,0 +1,1 @@
+DELETE FROM table_1 WHERE date = "2025-08-07";

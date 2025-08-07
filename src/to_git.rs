@@ -169,9 +169,16 @@ fn get_db_schema_worker(conn: Connection) -> Result<Vec<Table>, Error> {
     let mut result = tables_by_name.into_values().collect::<Vec<_>>();
     result.sort_by_key(|t| t.name.to_string());
 
-    // AFAIK, auto-generated tables (sqlite_schema, sqlite_temp_schema) don't have
-    // create sqls.
-    result = result.into_iter().filter(|t| !t.create_table_sql.is_empty()).collect();
+    result = result.into_iter().filter(
+        |t| {
+            // AFAIK, auto-generated tables (sqlite_schema, sqlite_temp_schema) don't have create-table-sqls.
+            !t.create_table_sql.is_empty() &&
+
+            // sqlite_sequence is also an auto-generated table, but it has a create-table-sql, so I have to
+            // filter it out with this heuristic.
+            !(t.name == "sqlite_sequence" && t.columns.len() == 2 && t.columns[0] == "name" && t.columns[1] == "seq")
+        }
+    ).collect();
 
     Ok(result)
 }
