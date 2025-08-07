@@ -19,8 +19,7 @@ cargo build --release
 2. Build with cargo
 
 ```sh
-# I haven't published yet. I'll publish this soon!
-# cargo install stfg
+cargo install stfg
 ```
 
 3. Use pre-built binaries
