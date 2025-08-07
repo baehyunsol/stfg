@@ -1,0 +1,10 @@
+[package]
+name = "stfg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22.1"
+ragit-cli = "0.4.2"
+ragit-fs = "0.4.2"
+rusqlite = { version = "0.37.0", features = ["bundled"] }

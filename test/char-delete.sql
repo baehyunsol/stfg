@@ -1,0 +1,1 @@
+DELETE FROM "a/b" WHERE id = 100;

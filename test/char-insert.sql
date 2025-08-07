@@ -1,0 +1,1 @@
+INSERT INTO "a/b" (id) VALUES (100);
