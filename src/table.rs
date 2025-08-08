@@ -8,6 +8,7 @@ pub struct Table {
     pub name: String,
     pub create_table_sql: String,
     pub create_index_sql: String,
+    pub create_trigger_sql: String,
 
     // We only need names of the columns because all the necessary information
     // to create the columns can be found in `create_scripts`.

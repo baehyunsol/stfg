@@ -1,3 +1,4 @@
+use crate::db::DB;
 use crate::error::Error;
 use crate::record::{
     Record,
@@ -7,6 +8,7 @@ use crate::record::{
 };
 use crate::table::{Table, escape_path};
 use crate::value::Value;
+use crate::view::View;
 use ragit_fs::{
     WriteMode,
     create_dir_all,
@@ -28,20 +30,21 @@ pub fn to_git(
     Ok(())
 }
 
-pub(crate) fn get_db_schema(db_path: &str) -> Result<Vec<Table>, Error> {
+pub(crate) fn get_db_schema(db_path: &str) -> Result<DB, Error> {
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     get_db_schema_worker(conn)
 }
 
-pub(crate) fn get_db_schema_from_raw_sql(sql: &str) -> Result<Vec<Table>, Error> {
+pub(crate) fn get_db_schema_from_raw_sql(sql: &str) -> Result<DB, Error> {
     let conn = Connection::open_in_memory()?;
     conn.execute(sql, [])?;
     get_db_schema_worker(conn)
 }
 
-fn get_db_schema_worker(conn: Connection) -> Result<Vec<Table>, Error> {
+fn get_db_schema_worker(conn: Connection) -> Result<DB, Error> {
     let mut tables_names: Vec<String> = vec![];
     let mut tables_by_name = HashMap::new();
+    let mut views = vec![];
 
     let mut tables_stmt = conn.prepare("SELECT * FROM pragma_table_list;")?;
     let mut table_stmt = conn.prepare("SELECT * FROM pragma_table_info(?1);")?;
@@ -79,6 +82,7 @@ fn get_db_schema_worker(conn: Connection) -> Result<Vec<Table>, Error> {
             // will be filled later
             create_table_sql: String::new(),
             create_index_sql: String::new(),
+            create_trigger_sql: String::new(),
 
             columns: column_names,
             primary_key,
@@ -111,7 +115,18 @@ fn get_db_schema_worker(conn: Connection) -> Result<Vec<Table>, Error> {
         };
 
         match r#type.as_str() {
-            "table" | "index" => {},
+            "table" | "index" | "trigger" => {},
+
+            // AFAIK, a view doesn't belong to a table and acts like a separate table.
+            // Also, a view doesn't have a record. We only have to store its create-sql.
+            "view" => {
+                views.push(View {
+                    name: object_name,
+                    // It seems like sqlite's dump doesn't end with ';' :(
+                    create_view_sql: format!("{sql};"),
+                });
+                continue;
+            },
             _ => {
                 return Err(Error::EdgeCase(format!("A type of a create script is `{type}`.")));
             },
@@ -133,29 +148,29 @@ fn get_db_schema_worker(conn: Connection) -> Result<Vec<Table>, Error> {
                 // The result has to be deterministic, so that it doesn't confuse git.
                 sqls.sort_by_key(|(_, name, _)| name.to_string());
 
-                // If I sort it this way, `sqls[0]` must be `CREATE TABLE` and the
-                // others must be `CREATE INDEX`
-                sqls.sort_by_key(
-                    |(t, _, _)| match t.as_str() {
-                        "table" => 0,
-                        "index" => 1,
-                        _ => unreachable!(),
-                    }
-                );
+                let create_table_sqls = sqls.iter().filter(
+                    |(t, _, _)| t == "table"
+                ).collect::<Vec<_>>();
+                let create_index_sqls = sqls.iter().filter(
+                    |(t, _, _)| t == "index"
+                ).collect::<Vec<_>>();
+                let create_trigger_sqls = sqls.iter().filter(
+                    |(t, _, _)| t == "trigger"
+                ).collect::<Vec<_>>();
 
-                if sqls.len() == 0 || sqls[0].0 != "table" {
-                    return Err(Error::EdgeCase(format!("no `CREATE TABLE` script found for `{table_name}`")));
+                if create_table_sqls.len() != 1 {
+                    return Err(Error::EdgeCase(format!("Expected exactly 1 `CREATE TABLE`, but found {} in {table_name}", create_table_sqls.len())));
                 }
 
-                if sqls.len() > 1 && sqls[1].0 == "table" {
-                    return Err(Error::EdgeCase(format!("table `{table_name}` has more than 1 `CREATE TABLE` script")));
-                }
-
-                table.create_table_sql = sqls[0].2.clone();
-                table.create_index_sql = (&sqls[1..]).iter().map(
+                table.create_table_sql = create_table_sqls[0].2.to_string();
+                table.create_index_sql = create_index_sqls.iter().map(
                     // It seems like sqlite's dump doesn't end with ';' :(
                     |(_, _, sql)| format!("{sql};")
-                ).collect::<Vec<_>>().join("\n");
+                ).collect::<Vec<_>>().join("\n\n");
+                table.create_trigger_sql = create_trigger_sqls.iter().map(
+                    // It seems like sqlite's dump doesn't end with ';' :(
+                    |(_, _, sql)| format!("{sql};")
+                ).collect::<Vec<_>>().join("\n\n");
             },
             None => {
                 return Err(Error::EdgeCase(format!("There's a schema for table {table_name}, but there's no such table.")));
@@ -163,13 +178,9 @@ fn get_db_schema_worker(conn: Connection) -> Result<Vec<Table>, Error> {
         }
     }
 
-    // As of now, there's no need to sort the result. But I'm sorting it anyway because
-    // 1. It isn't that expensive.
-    // 2. It's always safer to return a deterministic result.
-    let mut result = tables_by_name.into_values().collect::<Vec<_>>();
-    result.sort_by_key(|t| t.name.to_string());
-
-    result = result.into_iter().filter(
+    let mut tables = tables_by_name.into_values().collect::<Vec<_>>();
+    tables.sort_by_key(|t| t.name.to_string());
+    tables = tables.into_iter().filter(
         |t| {
             // AFAIK, auto-generated tables (sqlite_schema, sqlite_temp_schema) don't have create-table-sqls.
             !t.create_table_sql.is_empty() &&
@@ -180,7 +191,12 @@ fn get_db_schema_worker(conn: Connection) -> Result<Vec<Table>, Error> {
         }
     ).collect();
 
-    Ok(result)
+    views.sort_by_key(|v| v.name.to_string());
+
+    Ok(DB {
+        tables,
+        views,
+    })
 }
 
 // TODO: make it configurable
@@ -188,7 +204,7 @@ const FLUSH_THRES: usize = 1024;
 
 fn dump_db(
     db_path: &str,
-    db_schema: &[Table],
+    db_schema: &DB,
     output_path: &str,
 ) -> Result<(), Error> {
     if exists(&output_path) {
@@ -197,19 +213,9 @@ fn dump_db(
 
     create_dir_all(&output_path)?;
 
-    if db_schema.is_empty() {
-        // There must be at least 1 file for git to do something.
-        write_string(
-            &join(output_path, ".empty")?,
-            "",
-            WriteMode::AlwaysCreate,
-        )?;
-        return Ok(());
-    }
-
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
-    for table in db_schema.iter() {
+    for table in db_schema.tables.iter() {
         let mut record_stmt = conn.prepare(&table.record_stmt())?;
         let mut records_q = record_stmt.query([])?;
         let mut records_by_id_prefix = HashMap::new();
@@ -296,7 +302,26 @@ fn dump_db(
             &table.create_index_sql,
             WriteMode::AlwaysCreate,
         )?;
+        write_string(
+            &join(
+                &data_dir,
+                "trigger.sql",
+            )?,
+            &table.create_trigger_sql,
+            WriteMode::AlwaysCreate,
+        )?;
     }
+
+    write_string(
+        &join(
+            &output_path,
+            "view.sql",
+        )?,
+        &db_schema.views.iter().map(
+            |view| view.create_view_sql.to_string()
+        ).collect::<Vec<_>>().join("\n\n"),
+        WriteMode::AlwaysCreate,
+    )?;
 
     Ok(())
 }

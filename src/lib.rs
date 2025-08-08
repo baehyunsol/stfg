@@ -1,3 +1,4 @@
+mod db;
 mod error;
 mod from_git;
 mod record;
@@ -5,6 +6,7 @@ mod table;
 mod to_git;
 mod util;
 mod value;
+mod view;
 
 pub use error::Error;
 pub use to_git::to_git;

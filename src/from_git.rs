@@ -23,7 +23,7 @@ pub fn from_git(
     let mut conn = Connection::open(db_path)?;
 
     for table_dir in read_dir(data_dir, false)?.iter() {
-        if !is_dir(table_dir) && basename(&table_dir)? == ".empty" {
+        if !is_dir(&table_dir) {
             continue;
         }
 
@@ -32,8 +32,8 @@ pub fn from_git(
         let tx = conn.transaction()?;
 
         let table_schema = get_db_schema_from_raw_sql(&table_sql)?;
-        let table_schema = match table_schema.len() {
-            1 => table_schema[0].clone(),
+        let table_schema = match table_schema.tables.len() {
+            1 => table_schema.tables[0].clone(),
             n => {
                 return Err(Error::CorruptedDataFile(format!("expected exactly 1 `CREATE TABLE` statement from `table.sql`, but got {n}")));
             },
@@ -62,6 +62,18 @@ pub fn from_git(
 
         if !index_sql.trim().is_empty() {
             conn.execute_batch(&index_sql)?;
+        }
+
+        let trigger_sql = read_string(&join(table_dir, "trigger.sql")?)?;
+
+        if !trigger_sql.trim().is_empty() {
+            conn.execute_batch(&trigger_sql)?;
+        }
+
+        let view_sql = read_string(&join(data_dir, "view.sql")?)?;
+
+        if !view_sql.trim().is_empty() {
+            conn.execute_batch(&view_sql)?;
         }
     }
 
