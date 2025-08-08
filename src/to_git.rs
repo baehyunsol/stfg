@@ -18,7 +18,7 @@ use ragit_fs::{
     write_string,
 };
 use rusqlite::{Connection, OpenFlags};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 
 pub fn to_git(
@@ -44,6 +44,7 @@ pub(crate) fn get_db_schema_from_raw_sql(sql: &str) -> Result<DB, Error> {
 fn get_db_schema_worker(conn: Connection) -> Result<DB, Error> {
     let mut tables_names: Vec<String> = vec![];
     let mut tables_by_name = HashMap::new();
+    let mut shadow_tables: HashSet<String> = HashSet::new();
     let mut views = vec![];
 
     let mut tables_stmt = conn.prepare("SELECT * FROM pragma_table_list;")?;
@@ -56,6 +57,24 @@ fn get_db_schema_worker(conn: Connection) -> Result<DB, Error> {
 
     while let Some(table_q) = tables_q.next()? {
         let table_name = table_q.get("name")?;
+        let table_type: String = table_q.get("type")?;
+
+        match table_type.as_str() {
+            // We don't do extra stuffs to virtual tables because
+            // their create_table_sql contains `CREATE VIRTUAL TABLE`
+            "table" | "virtual" => {},
+
+            // we should not include this to the db schema because
+            // `CREATE VIRTUAL TABLE` will take care of this
+            "shadow" => {
+                shadow_tables.insert(table_name);
+                continue;
+            },
+            ty => {
+                return Err(Error::EdgeCase(format!("A type of table is `{ty}`.")));
+            },
+        }
+
         tables_names.push(table_name);
     }
 
@@ -113,6 +132,10 @@ fn get_db_schema_worker(conn: Connection) -> Result<DB, Error> {
             // Since they're auto-generated, we don't have to care about them.
             None => { continue; },
         };
+
+        if shadow_tables.contains(&table_name) {
+            continue;
+        }
 
         match r#type.as_str() {
             "table" | "index" | "trigger" => {},
